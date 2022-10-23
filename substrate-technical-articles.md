@@ -2381,7 +2381,7 @@ cargo build // 编译 （在这里也可以使用cargo build --release）
 
 查看终端
 
-![image-20221023102135172](/Users/qinjianquan/Desktop/substrate/offchain-workers/substrate-node-template-case2/static/offchain-worker.png)
+![image](https://github.com/shiyivei/substrate/blob/main/static/offchain-worker.png)
 
 **重点**
 
