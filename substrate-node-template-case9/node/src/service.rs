@@ -88,13 +88,12 @@ pub fn new_partial(
 		)?;
 	let client = Arc::new(client);
 
-	// 生成账户放入keystore，这样pallet就可以获取该账户了，offchain使用
 	if config.offchain_worker.enabled {
 		let keystore = keystore_container.sync_keystore();
 		sp_keystore::SyncCryptoStore::sr25519_generate_new(
 			&*keystore,
-			node_template_runtime::pallet_template::KEY_TYPE,
-			Some("//Alice"), /* 添加的是Alice账户，测试用的，本身有很多余额，也是Sudo */
+			node_template_runtime::pallet_kitties::KEY_TYPE,
+			Some("//Alice"),
 		)
 		.expect("Creating key with account Alice should succeed.");
 	}

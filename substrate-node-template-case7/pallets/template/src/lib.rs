@@ -14,45 +14,43 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-use serde::{Deserialize, Deserializer};
-use sp_runtime::offchain::{http, Duration};
+use frame_system::offchain::{AppCrypto, CreateSignedTransaction, SendSignedTransaction, Signer};
+use sp_core::crypto::KeyTypeId;
+
+pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"ocwd");
+pub mod crypto {
+	use super::KEY_TYPE;
+	use sp_core::sr25519::Signature as Sr25519Signature;
+	use sp_runtime::{
+		app_crypto::{app_crypto, sr25519},
+		traits::Verify,
+		MultiSignature, MultiSigner,
+	};
+	app_crypto!(sr25519, KEY_TYPE);
+
+	pub struct OcwAuthId;
+
+	impl frame_system::offchain::AppCrypto<MultiSigner, MultiSignature> for OcwAuthId {
+		type RuntimeAppPublic = Public;
+		type GenericSignature = sp_core::sr25519::Signature;
+		type GenericPublic = sp_core::sr25519::Public;
+	}
+
+	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature>
+		for OcwAuthId
+	{
+		type RuntimeAppPublic = Public;
+		type GenericSignature = sp_core::sr25519::Signature;
+		type GenericPublic = sp_core::sr25519::Public;
+	}
+}
 
 #[frame_support::pallet]
 pub mod pallet {
 	use super::*;
-	use frame_support::{inherent::Vec, pallet_prelude::*};
+	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
-
-	#[derive(Deserialize, Encode, Decode)] // 来自serde scale
-	struct GithubInfo {
-		#[serde(deserialize_with = "de_string_to_bytes")] // 使用指定的方法解析字段
-		login: Vec<u8>, // 不推荐用 string，用
-		#[serde(deserialize_with = "de_string_to_bytes")] // 使用指定的方法解析字段
-		blog: Vec<u8>,
-		public_repos: u32,
-	}
-
-	pub fn de_string_to_bytes<'de, D>(de: D) -> Result<Vec<u8>, D::Error>
-	// 样板代码
-	where
-		D: Deserializer<'de>,
-	{
-		let s: &str = Deserialize::deserialize(de)?;
-		Ok(s.as_bytes().to_vec())
-	}
-
-	use core::{convert::TryInto, fmt};
-	impl fmt::Debug for GithubInfo {
-		fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-			write!(
-				f,
-				"{{ login: {}, blog: {}, public_repos: {} }}",
-				sp_std::str::from_utf8(&self.login).map_err(|_| fmt::Error)?,
-				sp_std::str::from_utf8(&self.blog).map_err(|_| fmt::Error)?,
-				&self.public_repos
-			)
-		}
-	}
+	use sp_std::{vec, vec::Vec};
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
@@ -60,9 +58,10 @@ pub mod pallet {
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
-	pub trait Config: frame_system::Config {
+	pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+		type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
 	}
 
 	// The pallet's runtime storage items.
@@ -133,49 +132,68 @@ pub mod pallet {
 				},
 			}
 		}
+		// 在链上定义函数,提交变量，如上面的函数一样，该怎么写就怎么写
+		#[pallet::weight(0)]
+		pub fn submit_data(origin: OriginFor<T>, payload: Vec<u8>) -> DispatchResultWithPostInfo {
+			let _who = ensure_signed(origin)?;
+
+			log::info!("in submit_data call: {:?}", payload);
+
+			Ok(().into())
+		}
 	}
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
 		fn offchain_worker(block_number: T::BlockNumber) {
 			log::info!("Hello World from offchain workers!: {:?}", block_number);
 
-			if let Ok(info) = Self::fetch_github_info() {
-				log::info!("Github Info: {:?}", info);
-			} else {
-				log::info!("Error while fetch github Info");
-			}
+			// 通过offchain worker获得要提交的变量,可以是从外部获取
+			let payload: Vec<u8> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+			// 执行辅助函数
+			_ = Self::send_signed_tx(payload);
+
 			log::info!("Leave from offchain workers!: {:?}", block_number);
+		}
+
+		fn on_initialize(_n: T::BlockNumber) -> Weight {
+			log::info!("in on_initialize!");
+			let weight: Weight = Default::default();
+			weight
+		}
+		fn on_finalize(_n: T::BlockNumber) {
+			log::info!("in on_finalize!");
+		}
+
+		fn on_idle(_n: T::BlockNumber, _remaining_weight: Weight) -> Weight {
+			log::info!("in on_idle!");
+			let weight: Weight = Default::default();
+			weight
 		}
 	}
 
 	// 辅助函数
 	impl<T: Config> Pallet<T> {
-		fn fetch_github_info() -> Result<GithubInfo, http::Error> {
-			// prepare for send request
-			let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(8_000));
-			let request = http::Request::get("https://api.github.com/orgs/substrate-developer-hub");
-			let pending = request
-				.add_header("User-Agent", "Substrate-Offchain-Worker")
-				.deadline(deadline)
-				.send()
-				.map_err(|_| http::Error::IoError)?;
-			let response =
-				pending.try_wait(deadline).map_err(|_| http::Error::DeadlineReached)??;
-			if response.code != 200 {
-				log::warn!("Unexpected status code: {}", response.code);
-				return Err(http::Error::Unknown)
+		fn send_signed_tx(payload: Vec<u8>) -> Result<(), &'static str> {
+			let signer = Signer::<T, T::AuthorityId>::all_accounts();
+			if !signer.can_sign() {
+				return Err(
+					"No local accounts available. Consider adding one via `author_insertKey` RPC.",
+				)
 			}
-			let body = response.body().collect::<Vec<u8>>();
-			let body_str = sp_std::str::from_utf8(&body).map_err(|_| {
-				log::warn!("No UTF8 body");
-				http::Error::Unknown
-			})?;
 
-			// parse the response str
-			let gh_info: GithubInfo =
-				serde_json::from_str(body_str).map_err(|_| http::Error::Unknown)?;
+			// 在辅助函数中调用 链上函数
+			let results = signer
+				.send_signed_transaction(|_account| Call::submit_data { payload: payload.clone() });
 
-			Ok(gh_info)
+			for (acc, res) in &results {
+				match res {
+					Ok(()) => log::info!("[{:?}] Submitted data:{:?}", acc.id, payload),
+					Err(e) => log::error!("[{:?}] Failed to submit transaction: {:?}", acc.id, e),
+				}
+			}
+
+			Ok(())
 		}
 	}
 }

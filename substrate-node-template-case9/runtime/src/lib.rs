@@ -6,7 +6,6 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
-use codec::Encode;
 use pallet_grandpa::{
 	fg_primitives, AuthorityId as GrandpaId, AuthorityList as GrandpaAuthorityList,
 };
@@ -19,10 +18,9 @@ use sp_runtime::{
 		AccountIdLookup, BlakeTwo256, Block as BlockT, IdentifyAccount, NumberFor, One, Verify,
 	},
 	transaction_validity::{TransactionSource, TransactionValidity},
-	ApplyExtrinsicResult, MultiSignature, SaturatedConversion,
+	ApplyExtrinsicResult, MultiSignature,
 };
 use sp_std::prelude::*;
-
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
@@ -272,7 +270,6 @@ impl pallet_sudo::Config for Runtime {
 	type RuntimeCall = RuntimeCall;
 }
 
-// 当offchain worker调用pallet中的函数时，在此处产生真正的交易
 impl<LocalCall> frame_system::offchain::CreateSignedTransaction<LocalCall> for Runtime
 where
 	RuntimeCall: From<LocalCall>,
@@ -282,10 +279,7 @@ where
 		public: <Signature as sp_runtime::traits::Verify>::Signer,
 		account: AccountId,
 		nonce: Index,
-	) -> Option<(
-		RuntimeCall,
-		<UncheckedExtrinsic as sp_runtime::traits::Extrinsic>::SignaturePayload,
-	)> {
+	) -> Option<(Call, <UncheckedExtrinsic as sp_runtime::traits::Extrinsic>::SignaturePayload)> {
 		let tip = 0;
 
 		let period =
@@ -325,13 +319,17 @@ where
 	RuntimeCall: From<C>,
 {
 	type Extrinsic = UncheckedExtrinsic;
-	type OverarchingCall = RuntimeCall;
+	type OverarchingCall = RuntimeCallCall;
 }
-
 /// Configure the pallet-template in pallets/template.
 impl pallet_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type AuthorityId = pallet_template::crypto::OcwAuthId;
+	type Randomness = RandomnessCollectiveFlip;
+	type KittyIndex = u32;
+	type Currency = Balances;
+	type MaxKittyIndex = ConstU32<512>;
+	type KittyPrice = ConstU128<512>;
+	type AuthorityId = pallet_template::crypto::KittiesAuthId;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
